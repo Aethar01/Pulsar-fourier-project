@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::io::Write;
 use std::f64::consts::PI;
 
-
 pub fn fft(input: PathBuf, output: Option<PathBuf>) {
     let input = std::fs::read_to_string(input).expect("Unable to read input file");
 
@@ -45,7 +44,6 @@ pub fn compute_fourier_transform(data: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>)
     for k in 0..n {
         let theta = 2.0 * PI * k as f64 / n as f64;
         
-        // Initialize recurrence relation
         let mut u = vec![0.0; n + 2];
         
         // Compute U_n using recurrence relation

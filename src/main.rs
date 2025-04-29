@@ -64,7 +64,7 @@ fn main() {
                 None => Box::new(stdout()),
             };
             
-            tools::analyze_pulsar_data(&data, output_writer);
+            tools::analyze_pulsar_data(&data, output_writer, None);
         }
         Cli::Synthetic { freq1, freq2, output } => {
             let synthetic_data = tools::generate_synthetic_data(freq1, freq2);
@@ -74,12 +74,11 @@ fn main() {
                 None => Box::new(stdout()),
             };
             
-            tools::analyze_pulsar_data(&synthetic_data, output_writer);
+            tools::analyze_pulsar_data(&synthetic_data, output_writer, Some((freq1, freq2)));
         }
+
         Cli::FFT { input, output } => {
             ft::fft(input, output);
         }
     }
 }
-
-
