@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
+plotters = "0.3.7"
 rustfft = "6.3.0"
