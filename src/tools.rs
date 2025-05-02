@@ -79,11 +79,14 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
     }
     
     writeln!(output, "\nSignificant Peaks:").unwrap();
+    let delta_f = 1.0 / (n as f64 * delta_t);
+    let freq_error = delta_f / 2.0;
     for peak in &peaks {
-        let freq = peak.index as f64 / (n as f64 * delta_t);
+        let freq = peak.index as f64 * delta_f;
         let snr = (peak.value - noise_floor) / noise_floor;
         writeln!(output, "Frequency: {:.3} Hz, Power: {:.3}, SNR: {:.3}", freq, peak.value, snr).unwrap();
     }
+    writeln!(output, "Frequency Error: +- {:.3} Hz", freq_error).unwrap();
     
     // Phase binning analysis for the strongest 10 peaks
     for i in 0..1 {
@@ -132,9 +135,9 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
 
     writeln!(output, "\nBest Period Detection:").unwrap();
     if let Some(main_peak) = peaks.first() {
-        let best_period = find_best_period(data, 1.0 / main_peak.index as f64, delta_t, 10);
+        let (best_period, error) = find_best_period(data, 1.0 / main_peak.index as f64, delta_t, 10);
         writeln!(output, "Fundamental Frequency: {:.3} Hz", main_peak.index as f64 / (n as f64 * delta_t)).unwrap();
-        writeln!(output, "Best Period: {:.3} s", best_period).unwrap();
+        writeln!(output, "Best Period: {:.3} +- {:.5} s", best_period, error).unwrap();
     }
 
     if let Some((freq1, freq2)) = synthetic {
@@ -224,7 +227,7 @@ fn detect_harmonics(peaks: &[Peak], fundamental_idx: usize) -> Vec<usize> {
     harmonics
 }
 
-fn find_best_period(data: &[f64], candidate_period: f64, delta_t: f64, num_bins: usize) -> f64 {
+fn find_best_period(data: &[f64], candidate_period: f64, delta_t: f64, num_bins: usize) -> (f64, f64) {
     let mut best_period = candidate_period;
     let mut max_variation = 0.0;
     let steps = 20; // Number of steps to scan around the candidate period
@@ -242,7 +245,10 @@ fn find_best_period(data: &[f64], candidate_period: f64, delta_t: f64, num_bins:
             best_period = period;
         }
     }
-    best_period
+
+    let error = step_size / 2.0;
+
+    (best_period, error)
 }
 
 pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf) -> std::io::Result<()> {
