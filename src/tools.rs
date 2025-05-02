@@ -37,7 +37,7 @@ pub fn generate_synthetic_data(freq1: f64, freq2: f64) -> Vec<f64> {
     for t in 0..n {
         let t_f64 = t as f64;
         let value = 10.0 * (2.0 * PI * freq1 * t_f64 / n as f64).cos() + 
-                   5.0 * (2.0 * PI * freq2 * t_f64 / n as f64).sin();
+                   10.0 * (2.0 * PI * freq2 * t_f64 / n as f64).sin();
         data.push(value);
     }
     
@@ -52,6 +52,8 @@ pub struct Data {
     harmonics: Vec<usize>,
     n: usize,
     delta_t: f64,
+    bins: Vec<f64>,
+    phases_of_bins: Vec<f64>,
 }
 
 pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Option<(f64, f64)>) -> Data {
@@ -89,21 +91,29 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
     writeln!(output, "Frequency Error: +- {:.3} Hz", freq_error).unwrap();
     
     // Phase binning analysis for the strongest 10 peaks
-    for i in 0..1 {
-        if let Some(main_peak) = peaks.get(i) {
-            let freq = main_peak.index as f64 / (n as f64 * delta_t);
-            let period = 1.0 / freq;
-            
-            writeln!(output, "\nPhase Binning Analysis for {:.3} Hz (Period: {:.3} s)", freq, period).unwrap();
-            
-            let binned_data = phase_binning(data, period, delta_t, 10);
-            writeln!(output, "\nPhase Bins:").unwrap();
-            for (i, &bin) in binned_data.iter().enumerate() {
-                writeln!(output, "Bin {}: {:.3}", i, bin).unwrap();
+    let (bins, phases_of_bins): (Vec<f64>, Vec<f64>) = {
+            if let Some(main_peak) = peaks.get(0) {
+                let freq = main_peak.index as f64 / (n as f64 * delta_t);
+                let period = 1.0 / freq;
+                
+                writeln!(output, "\nPhase Binning Analysis for {:.3} Hz (Period: {:.3} s)", freq, period).unwrap();
+                
+                let binsnum = 11;
+                let mean = data.iter().sum::<f64>() / (n as f64);
+                let detrended = data.iter().map(|x| x - mean).collect::<Vec<f64>>();
+                let (binned_data, _) = phase_binning(data, period, delta_t, binsnum);
+                let (binned_detrended_data, phase_of_bins) = phase_binning(&detrended, period, delta_t, binsnum);
+                writeln!(output, "\nDetrended Phase Bins:").unwrap();
+                for (i, &bin) in binned_detrended_data.iter().enumerate() {
+                    writeln!(output, "Bin {}: {:.3}", i, bin).unwrap();
+                }
+                writeln!(output, "\nSum of Detrended Phase Bins: {}", binned_detrended_data.iter().sum::<f64>()).unwrap();
+                (binned_data, phase_of_bins)
             }
-            writeln!(output, "\nSum of Phase Bins: {}", binned_data.iter().sum::<f64>()).unwrap();
-        }
-    }
+            else {
+                (Vec::new(), Vec::new())
+            }
+    };
 
     // if let Some(main_peak) = peaks.first() {
     //     let freq = main_peak.index as f64 / (n as f64 * delta_t);
@@ -125,7 +135,10 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
             let harmonics = detect_harmonics(&peaks, main_peak.index);
             writeln!(output, "Fundamental Frequency: {:.3} Hz", main_peak.index as f64 / (n as f64 * delta_t)).unwrap();
             for h in &harmonics {
-                writeln!(output, "Harmonic at {:.3} Hz ({}x fundamental)", *h as f64 / (n as f64 * delta_t), h / main_peak.index).unwrap();
+                let freq = *h as f64 / (n as f64 * delta_t);
+                let ratio = freq / main_peak.index as f64;
+                let error = (ratio.round() - ratio).abs();
+                writeln!(output, "Harmonic at {:.3} Hz ({:.3}x fundamental, +-{:.3})", freq, ratio, error).unwrap();
             }
             harmonics
         } else {
@@ -135,7 +148,7 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
 
     writeln!(output, "\nBest Period Detection:").unwrap();
     if let Some(main_peak) = peaks.first() {
-        let (best_period, error) = find_best_period(data, 1.0 / main_peak.index as f64, delta_t, 10);
+        let (best_period, error) = find_best_period(data, 1.0 / main_peak.index as f64, delta_t, 30);
         writeln!(output, "Fundamental Frequency: {:.3} Hz", main_peak.index as f64 / (n as f64 * delta_t)).unwrap();
         writeln!(output, "Best Period: {:.3} +- {:.5} s", best_period, error).unwrap();
     }
@@ -155,6 +168,8 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
         harmonics,
         n,
         delta_t,
+        bins,
+        phases_of_bins,
     }
 }
 
@@ -182,9 +197,10 @@ fn find_peaks(power: &[f64]) -> Vec<Peak> {
     peaks
 }
 
-fn phase_binning(data: &[f64], period: f64, delta_t: f64, num_bins: usize) -> Vec<f64> {
+fn phase_binning(data: &[f64], period: f64, delta_t: f64, num_bins: usize) -> (Vec<f64>, Vec<f64>) {
     let mut bins = vec![0.0; num_bins];
     let mut counts = vec![0; num_bins];
+    let phase_of_bins = (0..num_bins).map(|i| (i as f64 / num_bins as f64) * 2.0 * PI).collect::<Vec<f64>>();
     
     for (t, &value) in data.iter().enumerate() {
         let time = t as f64 * delta_t;
@@ -204,7 +220,7 @@ fn phase_binning(data: &[f64], period: f64, delta_t: f64, num_bins: usize) -> Ve
             *bin = if count > 0 { *bin / count as f64 } else { f64::NAN };
         });
     
-    bins
+    (bins, phase_of_bins)
 }
 
 pub fn validate_synthetic_data(freq1: f64, freq2: f64, peaks: &[Peak]) -> bool {
@@ -237,7 +253,7 @@ fn find_best_period(data: &[f64], candidate_period: f64, delta_t: f64, num_bins:
 
     for step in 0..=steps {
         let period = min_period + step as f64 * step_size;
-        let binned = phase_binning(data, period, delta_t, num_bins);
+        let (binned, _) = phase_binning(data, period, delta_t, num_bins);
         let variation = binned.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap() - 
                        binned.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
         if variation > max_variation {
@@ -261,7 +277,8 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
     let _harmonics = data.harmonics;
     let n = data.n;
     let delta_t = data.delta_t;
-
+    let bins = data.bins;
+    let phases_of_bins = data.phases_of_bins;
 
     for (i, &p) in power.iter().enumerate() {
         if i == 0 {
@@ -270,11 +287,13 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
         let freq = i as f64 / (n as f64 * delta_t);
         writeln!(temp_data_writer, "{} {}", freq, p)?;
     }
-    writeln!(temp_gnu_writer, "set terminal png")?;
-    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/results.png'")?;
+    writeln!(temp_gnu_writer, "set terminal tikz tex")?;
+    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/ft.tex'")?;
     writeln!(temp_gnu_writer, "set xlabel 'Frequency (Hz)'")?;
+    writeln!(temp_gnu_writer, "set mxtics 5")?;
+    writeln!(temp_gnu_writer, "set mytics 5")?;
     writeln!(temp_gnu_writer, "set ylabel 'Power'")?;
-    writeln!(temp_gnu_writer, "plot '{}' using 1:2 notitle with lines", temp_data_file.to_str().unwrap())?;
+    writeln!(temp_gnu_writer, "plot '{}' using 1:2 notitle with lines lt black", temp_data_file.to_str().unwrap())?;
     temp_data_writer.flush()?;
     temp_gnu_writer.flush()?;
     run_gnuplot(&temp_gnu_file)?;
@@ -294,11 +313,13 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
         }
         writeln!(temp_data_writer, "{} {}", i as f64 * delta_t, x)?;
     }
-    writeln!(temp_gnu_writer, "set terminal png")?;
-    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/results1.png'")?;
+    writeln!(temp_gnu_writer, "set terminal tikz tex")?;
+    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/reconstruction.tex'")?;
+    writeln!(temp_gnu_writer, "set mxtics 5")?;
+    writeln!(temp_gnu_writer, "set mytics 5")?;
     writeln!(temp_gnu_writer, "set xlabel 'Time (s)'")?;
     writeln!(temp_gnu_writer, "set ylabel 'Amplitude'")?;
-    writeln!(temp_gnu_writer, "plot [0:1] [] '{}' using 1:2 notitle with lines", temp_data_file.to_str().unwrap())?;
+    writeln!(temp_gnu_writer, "plot [0:1] [] '{}' using 1:2 notitle with lines lt black", temp_data_file.to_str().unwrap())?;
     temp_data_writer.flush()?;
     temp_gnu_writer.flush()?;
     run_gnuplot(&temp_gnu_file)?;
@@ -353,6 +374,30 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
     //     freq_hz,
     // )?;
     // run_gnuplot(&temp_gnu_file)?;
+    
+    let mut temp_gnu_writer = Box::new(File::create(&temp_gnu_file).expect("Unable to create temporary file"));
+    let mut temp_data_writer = Box::new(File::create(&temp_data_file).expect("Unable to create temporary file"));
+    // create a histogram of the phase bins
+    //
+    for (phase, &count) in phases_of_bins.iter().zip(bins.iter()) {
+        let stddev = count.sqrt();
+        writeln!(temp_data_writer, "{} {} {}", phase/(2.0*PI), count, stddev)?;
+    }
+    for (phase, &count) in phases_of_bins.iter().zip(bins.iter()) {
+        let stddev = count.sqrt();
+        writeln!(temp_data_writer, "{} {} {}", phase/(2.0*PI) + 1.0, count, stddev)?;
+    }
+    writeln!(temp_gnu_writer, "set terminal tikz tex")?;
+    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/phasebins.tex'")?;
+    writeln!(temp_gnu_writer, "set xlabel 'Pulse Phase'")?;
+    writeln!(temp_gnu_writer, "set ylabel 'Count'")?;
+    writeln!(temp_gnu_writer, "set mxtics 5")?;
+    writeln!(temp_gnu_writer, "set mytics 5")?;
+    writeln!(temp_gnu_writer, "set style fill empty border 0")?;
+    writeln!(temp_gnu_writer, "plot [] [] '{}' using ($1+0.045):2:3 notitle with yerrorbars lt black, '{}' using 1:2 notitle with hsteps forward lt black", temp_data_file.to_str().unwrap(), temp_data_file.to_str().unwrap())?;
+    temp_data_writer.flush()?;
+    temp_gnu_writer.flush()?;
+    run_gnuplot(&temp_gnu_file)?;
 
     Ok(())
 }
