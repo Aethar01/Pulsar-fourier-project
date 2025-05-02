@@ -61,6 +61,9 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
     // Compute Fourier coefficients and power spectrum
     let (ak, bk, power) = ft::compute_fourier_transform(data);
     
+    // Estimate noise floor
+    let noise_floor = estimate_noise_floor(&power);
+
     // Find peaks in power spectrum
     let peaks = find_peaks(&power);
     
@@ -78,11 +81,12 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
     writeln!(output, "\nSignificant Peaks:").unwrap();
     for peak in &peaks {
         let freq = peak.index as f64 / (n as f64 * delta_t);
-        writeln!(output, "Frequency: {:.3} Hz, Power: {:.3}", freq, peak.value).unwrap();
+        let snr = (peak.value - noise_floor) / noise_floor;
+        writeln!(output, "Frequency: {:.3} Hz, Power: {:.3}, SNR: {:.3}", freq, peak.value, snr).unwrap();
     }
     
     // Phase binning analysis for the strongest 10 peaks
-    for i in 0..10 {
+    for i in 0..1 {
         if let Some(main_peak) = peaks.get(i) {
             let freq = main_peak.index as f64 / (n as f64 * delta_t);
             let period = 1.0 / freq;
@@ -261,7 +265,7 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
         writeln!(temp_data_writer, "{} {}", freq, p)?;
     }
     writeln!(temp_gnu_writer, "set terminal png")?;
-    writeln!(temp_gnu_writer, "set output 'results.png'")?;
+    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/results.png'")?;
     writeln!(temp_gnu_writer, "set xlabel 'Frequency (Hz)'")?;
     writeln!(temp_gnu_writer, "set ylabel 'Power'")?;
     writeln!(temp_gnu_writer, "plot '{}' using 1:2 notitle with lines", temp_data_file.to_str().unwrap())?;
@@ -285,15 +289,13 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
         writeln!(temp_data_writer, "{} {}", i as f64 * delta_t, x)?;
     }
     writeln!(temp_gnu_writer, "set terminal png")?;
-    writeln!(temp_gnu_writer, "set output 'results1.png'")?;
+    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/results1.png'")?;
     writeln!(temp_gnu_writer, "set xlabel 'Time (s)'")?;
     writeln!(temp_gnu_writer, "set ylabel 'Amplitude'")?;
     writeln!(temp_gnu_writer, "plot [0:1] [] '{}' using 1:2 notitle with lines", temp_data_file.to_str().unwrap())?;
     temp_data_writer.flush()?;
     temp_gnu_writer.flush()?;
     run_gnuplot(&temp_gnu_file)?;
-
-
 
     // let mut temp_gnu_writer = Box::new(File::create(&temp_gnu_file).expect("Unable to create temporary file"));
     // let mut temp_data_writer = Box::new(File::create(&temp_data_file).expect("Unable to create temporary file"));
@@ -321,30 +323,36 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
     // temp_gnu_writer.flush()?;
     // run_gnuplot(&temp_gnu_file)?;
 
-    let mut temp_gnu_writer = Box::new(File::create(&temp_gnu_file).expect("Unable to create temporary file"));
-    // let mut temp_data_writer = Box::new(File::create(&temp_data_file).expect("Unable to create temporary file"));
-    let dominant_peak = &peaks[0];
-    let k = dominant_peak.index;
-    let a_k = ak[k];
-    let b_k = bk[k];
-    let freq_hz = k as f64 / (n as f64 * delta_t); // Frequency in Hz
-    writeln!(temp_gnu_writer, "set terminal pngcairo enhanced font 'Arial,12' size 800,600")?;
-    writeln!(temp_gnu_writer, "set output 'results2.png'")?;
-    writeln!(temp_gnu_writer, "set samples 1000")?;
-    writeln!(temp_gnu_writer, "set xlabel 'Time (s)'")?;
-    writeln!(temp_gnu_writer, "set ylabel 'Amplitude'")?;
-    writeln!(temp_gnu_writer, "set grid")?;
-    writeln!(
-        temp_gnu_writer,
-        "plot [t=0:{}] {}*cos(2*pi*{}*t) + {}*sin(2*pi*{}*t) title 'Dominant Frequency: {:.2}' with lines lw 2",
-        (n as f64) * delta_t, // Total time in seconds
-        a_k,
-        freq_hz, // Use physical frequency (Hz)
-        b_k,
-        freq_hz,
-        freq_hz,
-    )?;
-    run_gnuplot(&temp_gnu_file)?;
+    // let mut temp_gnu_writer = Box::new(File::create(&temp_gnu_file).expect("Unable to create temporary file"));
+    // // let mut temp_data_writer = Box::new(File::create(&temp_data_file).expect("Unable to create temporary file"));
+    // let dominant_peak = &peaks[0];
+    // let k = dominant_peak.index;
+    // let a_k = ak[k];
+    // let b_k = bk[k];
+    // let freq_hz = k as f64 / (n as f64 * delta_t); // Frequency in Hz
+    // writeln!(temp_gnu_writer, "set terminal png")?;
+    // writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/results2.png'")?;
+    // writeln!(temp_gnu_writer, "set samples 1000")?;
+    // writeln!(temp_gnu_writer, "set xlabel 'Time (s)'")?;
+    // writeln!(temp_gnu_writer, "set ylabel 'Amplitude'")?;
+    // writeln!(temp_gnu_writer, "set grid")?;
+    // writeln!(
+    //     temp_gnu_writer,
+    //     "plot [t=0:{}] {}*cos(2*pi*{}*t) + {}*sin(2*pi*{}*t) title 'Dominant Frequency: {:.2}' with lines lw 2",
+    //     (n as f64) * delta_t, // Total time in seconds
+    //     a_k,
+    //     freq_hz, // Use physical frequency (Hz)
+    //     b_k,
+    //     freq_hz,
+    //     freq_hz,
+    // )?;
+    // run_gnuplot(&temp_gnu_file)?;
 
     Ok(())
+}
+
+fn estimate_noise_floor(power_spectrum: &[f64]) -> f64 {
+    let mut sorted = power_spectrum.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    sorted[sorted.len() / 2]
 }
