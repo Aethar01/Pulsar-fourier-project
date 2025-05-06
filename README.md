@@ -14,7 +14,7 @@ cargo build --release
 ```
 
 ## Usage
-```bash
+```
 Usage: Pulsar-fourier-project <COMMAND>
 
 Commands:
@@ -28,7 +28,7 @@ Options:
 ```
 
 ### Analyze
-```bash
+```
 Analyze pulsar data from file
 
 Usage: Pulsar-fourier-project analyze [OPTIONS] --input <INPUT>
@@ -41,7 +41,7 @@ Options:
 ```
 
 ### Synthetic
-```bash
+```
 Generate and analyze synthetic data
 
 Usage: Pulsar-fourier-project synthetic [OPTIONS] <FREQ1> <FREQ2>
@@ -57,7 +57,7 @@ Options:
 ```
 
 ### FFT
-```bash
+```
 Compute the Fourier transform of a file and return the results to stdout or a file
 
 Usage: Pulsar-fourier-project fft [OPTIONS] --input <INPUT>
