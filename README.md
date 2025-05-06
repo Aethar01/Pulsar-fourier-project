@@ -8,6 +8,7 @@ Build Dependencies:
 Runtime Dependencies:
 - GNUPlot (for plotting, unneeded if the `--plot` flag is not used)
 
+## Build
 ```bash
 cargo build --release
 ```
