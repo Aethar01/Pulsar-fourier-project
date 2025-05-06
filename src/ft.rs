@@ -53,7 +53,7 @@ pub fn compute_fourier_transform(data: &[f64]) -> (Vec<f64>, Vec<f64>, Vec<f64>)
         
         // Compute A_k and B_k
         ak[k] = (u[0] - u[1] * theta.cos()) / n as f64;
-        bk[k] = (u[1] * theta.sin()) / n as f64;
+        bk[k] = -(u[1] * theta.sin()) / n as f64;
         
         // Compute power
         power[k] = ak[k].powi(2) + bk[k].powi(2);

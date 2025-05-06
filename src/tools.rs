@@ -33,11 +33,12 @@ where P: AsRef<Path> {
 pub fn generate_synthetic_data(freq1: f64, freq2: f64) -> Vec<f64> {
     let n = 256;
     let mut data = Vec::with_capacity(n);
+    let delta_t = 0.004;
     
     for t in 0..n {
-        let t_f64 = t as f64;
-        let value = 10.0 * (2.0 * PI * freq1 * t_f64 / n as f64).cos() + 
-                   10.0 * (2.0 * PI * freq2 * t_f64 / n as f64).sin();
+        let t_f64 = t as f64 * delta_t;
+        let value = 10.0 * (2.0 * PI * freq1 * t_f64 as f64).cos() + 
+                   10.0 * (2.0 * PI * freq2 * t_f64 as f64).sin();
         data.push(value);
     }
     
@@ -45,6 +46,7 @@ pub fn generate_synthetic_data(freq1: f64, freq2: f64) -> Vec<f64> {
 }
 
 pub struct Data {
+    raw_data: Vec<f64>,
     ak: Vec<f64>,
     bk: Vec<f64>,
     power: Vec<f64>,
@@ -56,12 +58,12 @@ pub struct Data {
     phases_of_bins: Vec<f64>,
 }
 
-pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Option<(f64, f64)>) -> Data {
+pub fn analyze_pulsar_data<W: Write>(data: Vec<f64>, mut output: W, synthetic: Option<(f64, f64)>) -> Data {
     let n = data.len();
     let delta_t = 0.004; // 4ms sampling interval
     
     // Compute Fourier coefficients and power spectrum
-    let (ak, bk, power) = ft::compute_fourier_transform(data);
+    let (ak, bk, power) = ft::compute_fourier_transform(&data);
     
     // Estimate noise floor
     let noise_floor = estimate_noise_floor(&power);
@@ -86,11 +88,11 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
     for peak in &peaks {
         let freq = peak.index as f64 * delta_f;
         let snr = (peak.value - noise_floor) / noise_floor;
-        writeln!(output, "Frequency: {:.3} Hz, Power: {:.3}, SNR: {:.3}", freq, peak.value, snr).unwrap();
+        let snr_error = (peak.value / noise_floor).sqrt();
+        writeln!(output, "Frequency: {:.3} Hz, Power: {:.3}, SNR: {:.3} ± {:.3}", freq, peak.value, snr, snr_error).unwrap();
     }
     writeln!(output, "Frequency Error: +- {:.3} Hz", freq_error).unwrap();
     
-    // Phase binning analysis for the strongest 10 peaks
     let (bins, phases_of_bins): (Vec<f64>, Vec<f64>) = {
             if let Some(main_peak) = peaks.get(0) {
                 let freq = main_peak.index as f64 / (n as f64 * delta_t);
@@ -101,7 +103,7 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
                 let binsnum = 11;
                 let mean = data.iter().sum::<f64>() / (n as f64);
                 let detrended = data.iter().map(|x| x - mean).collect::<Vec<f64>>();
-                let (binned_data, _) = phase_binning(data, period, delta_t, binsnum);
+                let (binned_data, _) = phase_binning(&data, period, delta_t, binsnum);
                 let (binned_detrended_data, phase_of_bins) = phase_binning(&detrended, period, delta_t, binsnum);
                 writeln!(output, "\nDetrended Phase Bins:").unwrap();
                 for (i, &bin) in binned_detrended_data.iter().enumerate() {
@@ -148,19 +150,20 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
 
     writeln!(output, "\nBest Period Detection:").unwrap();
     if let Some(main_peak) = peaks.first() {
-        let (best_period, error) = find_best_period(data, 1.0 / main_peak.index as f64, delta_t, 30);
+        let (best_period, error) = find_best_period(&data, 1.0 / main_peak.index as f64, delta_t, 30);
         writeln!(output, "Fundamental Frequency: {:.3} Hz", main_peak.index as f64 / (n as f64 * delta_t)).unwrap();
         writeln!(output, "Best Period: {:.3} +- {:.5} s", best_period, error).unwrap();
     }
 
     if let Some((freq1, freq2)) = synthetic {
         writeln!(output, "\nSynthetic Data Validation:").unwrap();
-        writeln!(output, "Fundamental Frequency: {:.3} Hz", freq1 / (n as f64 * delta_t)).unwrap();
-        writeln!(output, "Second Fundamental Frequency: {:.3} Hz", freq2 / (n as f64 * delta_t)).unwrap();
-        writeln!(output, "Validation: {}", validate_synthetic_data(freq1, freq2, &peaks)).unwrap();
+        writeln!(output, "Fundamental Frequency: {:.3} Hz", freq1).unwrap();
+        writeln!(output, "Second Fundamental Frequency: {:.3} Hz", freq2).unwrap();
+        writeln!(output, "Validation: {}", validate_synthetic_data(freq1, freq2, &peaks, freq_error, delta_f)).unwrap();
     }
 
     Data {
+        raw_data: data,
         ak,
         bk,
         power,
@@ -174,8 +177,8 @@ pub fn analyze_pulsar_data<W: Write>(data: &[f64], mut output: W, synthetic: Opt
 }
 
 pub struct Peak {
-    index: usize,
-    value: f64,
+    pub index: usize,
+    pub value: f64,
 }
 
 fn find_peaks(power: &[f64]) -> Vec<Peak> {
@@ -223,13 +226,9 @@ fn phase_binning(data: &[f64], period: f64, delta_t: f64, num_bins: usize) -> (V
     (bins, phase_of_bins)
 }
 
-pub fn validate_synthetic_data(freq1: f64, freq2: f64, peaks: &[Peak]) -> bool {
-    let n = 256;
-    let delta_t = 0.004;
-    let expected_freq1 = freq1 / (n as f64 * delta_t);
-    let expected_freq2 = freq2 / (n as f64 * delta_t);
-    peaks.iter().any(|p| (p.index as f64 - expected_freq1).abs() < 1.0) &&
-    peaks.iter().any(|p| (p.index as f64 - expected_freq2).abs() < 1.0)
+pub fn validate_synthetic_data(freq1: f64, freq2: f64, peaks: &[Peak], freq_error: f64, delta_f: f64) -> bool {
+    peaks.iter().any(|p| (p.index as f64 * delta_f - freq1).abs() < freq_error) &&
+    peaks.iter().any(|p| (p.index as f64 * delta_f - freq2).abs() < freq_error)
 }
 
 fn detect_harmonics(peaks: &[Peak], fundamental_idx: usize) -> Vec<usize> {
@@ -254,8 +253,8 @@ fn find_best_period(data: &[f64], candidate_period: f64, delta_t: f64, num_bins:
     for step in 0..=steps {
         let period = min_period + step as f64 * step_size;
         let (binned, _) = phase_binning(data, period, delta_t, num_bins);
-        let variation = binned.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap() - 
-                       binned.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap();
+        let variation = binned.iter().max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(&0.0) -
+                       binned.iter().min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(&0.0);
         if variation > max_variation {
             max_variation = variation;
             best_period = period;
@@ -267,13 +266,14 @@ fn find_best_period(data: &[f64], candidate_period: f64, delta_t: f64, num_bins:
     (best_period, error)
 }
 
-pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf) -> std::io::Result<()> {
+pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf, is_synthetic: bool) -> std::io::Result<()> {
     let mut temp_gnu_writer = Box::new(File::create(&temp_gnu_file).expect("Unable to create temporary file"));
     let mut temp_data_writer = Box::new(File::create(&temp_data_file).expect("Unable to create temporary file"));
+    let raw_data = data.raw_data;
     let ak = data.ak;
     let bk = data.bk;
     let power = data.power;
-    let peaks = data.peaks;
+    let _peaks = data.peaks;
     let _harmonics = data.harmonics;
     let n = data.n;
     let delta_t = data.delta_t;
@@ -287,12 +287,27 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
         let freq = i as f64 / (n as f64 * delta_t);
         writeln!(temp_data_writer, "{} {}", freq, p)?;
     }
+
     writeln!(temp_gnu_writer, "set terminal tikz tex")?;
-    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/ft.tex'")?;
+    if is_synthetic {
+        writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/ft_synthetic.tex'")?;
+        writeln!(temp_gnu_writer, "set xtics add ('$k_1$' 23)")?;
+        writeln!(temp_gnu_writer, "set xtics add ('$k_2$' 67)")?;
+        writeln!(temp_gnu_writer, "set xtics out")?;
+    } else {
+        writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/ft.tex'")?;
+        writeln!(temp_gnu_writer, "set xtics add ('$k_1$' 30.273)")?;
+        writeln!(temp_gnu_writer, "set xtics add ('$k_2$' 59.570)")?;
+        writeln!(temp_gnu_writer, "set xtics add ('$k_3$' 89.844)")?;
+        writeln!(temp_gnu_writer, "set x2tics ('$k_4$' 99.609)")?;
+        writeln!(temp_gnu_writer, "set xtics add ('$k_5$' 121.094)")?;
+    }
+    writeln!(temp_gnu_writer, "set xtics out")?;
     writeln!(temp_gnu_writer, "set xlabel 'Frequency (Hz)'")?;
     writeln!(temp_gnu_writer, "set mxtics 5")?;
     writeln!(temp_gnu_writer, "set mytics 5")?;
     writeln!(temp_gnu_writer, "set ylabel 'Power'")?;
+    writeln!(temp_gnu_writer, "set arrow from {}, graph 0 to {}, graph 1 nohead dt '.'", (n-5) / 2, (n-5) / 2)?;
     writeln!(temp_gnu_writer, "plot '{}' using 1:2 notitle with lines lt black", temp_data_file.to_str().unwrap())?;
     temp_data_writer.flush()?;
     temp_gnu_writer.flush()?;
@@ -307,19 +322,41 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
             ak[k] * (theta * t).cos() + bk[k] * (theta * t).sin()
         }).collect::<Vec<f64>>()
     };
-    for (i, x) in x_t.iter().enumerate() {
+    for (i, (x, dat)) in x_t.iter().zip(raw_data.iter()).enumerate() {
         if i == 0 {
             continue;
         }
-        writeln!(temp_data_writer, "{} {}", i as f64 * delta_t, x)?;
+        writeln!(temp_data_writer, "{} {} {}", i as f64 * delta_t, x, dat)?;
     }
     writeln!(temp_gnu_writer, "set terminal tikz tex")?;
-    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/reconstruction.tex'")?;
+    if is_synthetic {
+        writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/reconstruction_synthetic.tex'")?;
+    } else {
+        writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/reconstruction.tex'")?;
+    }
     writeln!(temp_gnu_writer, "set mxtics 5")?;
     writeln!(temp_gnu_writer, "set mytics 5")?;
     writeln!(temp_gnu_writer, "set xlabel 'Time (s)'")?;
     writeln!(temp_gnu_writer, "set ylabel 'Amplitude'")?;
+    writeln!(temp_gnu_writer, "set xtics out")?;
     writeln!(temp_gnu_writer, "plot [0:1] [] '{}' using 1:2 notitle with lines lt black", temp_data_file.to_str().unwrap())?;
+
+    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/reconstruction_raw.tex'")?;
+    writeln!(temp_gnu_writer, "plot [0:1] [] '{}' using 1:3 notitle with lines lt black", temp_data_file.to_str().unwrap())?;
+
+
+    // writeln!(temp_gnu_writer, "set multiplot")?;
+    // writeln!(temp_gnu_writer, "set size 1.0, 0.5")?;
+    // writeln!(temp_gnu_writer, "set origin 0.0, 0.0")?;
+    // writeln!(temp_gnu_writer, "set mxtics 5")?;
+    // writeln!(temp_gnu_writer, "set mytics 5")?;
+    // writeln!(temp_gnu_writer, "set xlabel 'Time (s)'")?;
+    // writeln!(temp_gnu_writer, "set ylabel 'Amplitude'")?;
+    // writeln!(temp_gnu_writer, "plot [0:1] [] '{}' using 1:2 notitle with lines lt black", temp_data_file.to_str().unwrap())?;
+    // writeln!(temp_gnu_writer, "set origin 0.0, 0.5")?;
+    // writeln!(temp_gnu_writer, "plot [0:1] [] '{}' using 1:3 notitle with lines lt black", temp_data_file.to_str().unwrap())?;
+    // writeln!(temp_gnu_writer, "unset multiplot")?;
+
     temp_data_writer.flush()?;
     temp_gnu_writer.flush()?;
     run_gnuplot(&temp_gnu_file)?;
@@ -388,11 +425,16 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf)
         writeln!(temp_data_writer, "{} {} {}", phase/(2.0*PI) + 1.0, count, stddev)?;
     }
     writeln!(temp_gnu_writer, "set terminal tikz tex")?;
-    writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/phasebins.tex'")?;
+    if is_synthetic {
+        writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/phasebins_synthetic.tex'")?;
+    } else {
+        writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/phasebins.tex'")?;
+    }
     writeln!(temp_gnu_writer, "set xlabel 'Pulse Phase'")?;
     writeln!(temp_gnu_writer, "set ylabel 'Count'")?;
     writeln!(temp_gnu_writer, "set mxtics 5")?;
     writeln!(temp_gnu_writer, "set mytics 5")?;
+    writeln!(temp_gnu_writer, "set xtics out")?;
     writeln!(temp_gnu_writer, "set style fill empty border 0")?;
     writeln!(temp_gnu_writer, "plot [] [] '{}' using ($1+0.045):2:3 notitle with yerrorbars lt black, '{}' using 1:2 notitle with hsteps forward lt black", temp_data_file.to_str().unwrap(), temp_data_file.to_str().unwrap())?;
     temp_data_writer.flush()?;
@@ -406,4 +448,20 @@ fn estimate_noise_floor(power_spectrum: &[f64]) -> f64 {
     let mut sorted = power_spectrum.to_vec();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
     sorted[sorted.len() / 2]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn synthetic_data() {
+        let freq1 = 21.0;
+        let freq2 = 67.0;
+        let synthetic_data = generate_synthetic_data(freq1, freq2);
+        let data = analyze_pulsar_data(synthetic_data, Box::new(std::io::sink()), Some((freq1, freq2)));
+        let delta_f = 1.0 / (data.n as f64 * data.delta_t);
+        let freq_error = delta_f / 2.0;
+        assert!(validate_synthetic_data(freq1, freq2, &data.peaks, freq_error, delta_f));
+    }
 }

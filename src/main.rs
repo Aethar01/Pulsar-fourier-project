@@ -75,10 +75,10 @@ fn main() {
             let temp_gnu_file = std::env::temp_dir().join("pfp-temp-gnuscript");
             let temp_data_file = std::env::temp_dir().join("pfp-temp-data");
 
-            let data = tools::analyze_pulsar_data(&data, output_writer, None);
+            let data = tools::analyze_pulsar_data(data, output_writer, None);
             
             if plot {
-                match tools::plot_results(data, temp_gnu_file, temp_data_file) {
+                match tools::plot_results(data, temp_gnu_file, temp_data_file, false) {
                     Ok(_) => {},
                     Err(e) => {
                         eprintln!("Error plotting results: {}", e);
@@ -95,13 +95,13 @@ fn main() {
                 None => Box::new(stdout()),
             };
             
-            let data = tools::analyze_pulsar_data(&synthetic_data, output_writer, Some((freq1, freq2)));
+            let data = tools::analyze_pulsar_data(synthetic_data, output_writer, Some((freq1, freq2)));
 
             let temp_gnu_file = std::env::temp_dir().join("pfp-temp-gnuscript");
             let temp_data_file = std::env::temp_dir().join("pfp-temp-data");
 
             if plot {
-                match tools::plot_results(data, temp_gnu_file, temp_data_file) {
+                match tools::plot_results(data, temp_gnu_file, temp_data_file, true) {
                     Ok(_) => {},
                     Err(e) => {
                         eprintln!("Error plotting results: {}", e);
