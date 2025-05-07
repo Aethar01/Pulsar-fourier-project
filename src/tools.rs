@@ -56,6 +56,8 @@ pub struct Data {
     delta_t: f64,
     bins: Vec<f64>,
     phases_of_bins: Vec<f64>,
+    bins_half: Vec<f64>,
+    phases_of_bins_half: Vec<f64>,
 }
 
 pub fn analyze_pulsar_data<W: Write>(data: Vec<f64>, mut output: W, synthetic: Option<(f64, f64)>) -> Data {
@@ -101,6 +103,30 @@ pub fn analyze_pulsar_data<W: Write>(data: Vec<f64>, mut output: W, synthetic: O
                 writeln!(output, "\nPhase Binning Analysis for {:.3} Hz (Period: {:.3} s)", freq, period).unwrap();
                 
                 let binsnum = 11;
+                let mean = data.iter().sum::<f64>() / (n as f64);
+                let detrended = data.iter().map(|x| x - mean).collect::<Vec<f64>>();
+                let (binned_data, _) = phase_binning(&data, period, delta_t, binsnum);
+                let (binned_detrended_data, phase_of_bins) = phase_binning(&detrended, period, delta_t, binsnum);
+                writeln!(output, "\nDetrended Phase Bins:").unwrap();
+                for (i, &bin) in binned_detrended_data.iter().enumerate() {
+                    writeln!(output, "Bin {}: {:.3}", i, bin).unwrap();
+                }
+                writeln!(output, "\nSum of Detrended Phase Bins: {}", binned_detrended_data.iter().sum::<f64>()).unwrap();
+                (binned_data, phase_of_bins)
+            }
+            else {
+                (Vec::new(), Vec::new())
+            }
+    };
+
+    let (bins_half, phases_of_bins_half): (Vec<f64>, Vec<f64>) = {
+            if let Some(main_peak) = peaks.get(1) {
+                let freq = main_peak.index as f64 / (n as f64 * delta_t);
+                let period = 1.0 / freq;
+                
+                writeln!(output, "\nPhase Binning Analysis for {:.3} Hz (Period: {:.3} s)", freq, period).unwrap();
+                
+                let binsnum = 21;
                 let mean = data.iter().sum::<f64>() / (n as f64);
                 let detrended = data.iter().map(|x| x - mean).collect::<Vec<f64>>();
                 let (binned_data, _) = phase_binning(&data, period, delta_t, binsnum);
@@ -173,6 +199,8 @@ pub fn analyze_pulsar_data<W: Write>(data: Vec<f64>, mut output: W, synthetic: O
         delta_t,
         bins,
         phases_of_bins,
+        bins_half,
+        phases_of_bins_half,
     }
 }
 
@@ -279,6 +307,8 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf,
     let delta_t = data.delta_t;
     let bins = data.bins;
     let phases_of_bins = data.phases_of_bins;
+    let bins_half = data.bins_half;
+    let phases_of_bins_half = data.phases_of_bins_half;
 
     for (i, &p) in power.iter().enumerate() {
         if i == 0 {
@@ -414,8 +444,6 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf,
     
     let mut temp_gnu_writer = Box::new(File::create(&temp_gnu_file).expect("Unable to create temporary file"));
     let mut temp_data_writer = Box::new(File::create(&temp_data_file).expect("Unable to create temporary file"));
-    // create a histogram of the phase bins
-    //
     for (phase, &count) in phases_of_bins.iter().zip(bins.iter()) {
         let stddev = count.sqrt();
         writeln!(temp_data_writer, "{} {} {}", phase/(2.0*PI), count, stddev)?;
@@ -436,7 +464,36 @@ pub fn plot_results(data: Data, temp_gnu_file: PathBuf, temp_data_file: PathBuf,
     writeln!(temp_gnu_writer, "set mytics 5")?;
     writeln!(temp_gnu_writer, "set xtics out")?;
     writeln!(temp_gnu_writer, "set style fill empty border 0")?;
+    writeln!(temp_gnu_writer, "set label '$f$' at graph 0.95, graph 0.95 center")?;
     writeln!(temp_gnu_writer, "plot [] [] '{}' using ($1+0.045):2:3 notitle with yerrorbars lt black, '{}' using 1:2 notitle with hsteps forward lt black", temp_data_file.to_str().unwrap(), temp_data_file.to_str().unwrap())?;
+    temp_data_writer.flush()?;
+    temp_gnu_writer.flush()?;
+    run_gnuplot(&temp_gnu_file)?;
+
+    let mut temp_gnu_writer = Box::new(File::create(&temp_gnu_file).expect("Unable to create temporary file"));
+    let mut temp_data_writer = Box::new(File::create(&temp_data_file).expect("Unable to create temporary file"));
+    for (phase, &count) in phases_of_bins_half.iter().zip(bins_half.iter()) {
+        let stddev = count.sqrt();
+        writeln!(temp_data_writer, "{} {} {}", phase/(2.0*PI), count, stddev)?;
+    }
+    for (phase, &count) in phases_of_bins_half.iter().zip(bins_half.iter()) {
+        let stddev = count.sqrt();
+        writeln!(temp_data_writer, "{} {} {}", phase/(2.0*PI) + 1.0, count, stddev)?;
+    }
+    writeln!(temp_gnu_writer, "set terminal tikz tex")?;
+    if is_synthetic {
+        writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/phasebins_half_synthetic.tex'")?;
+    } else {
+        writeln!(temp_gnu_writer, "set output 'Pfp-latex/plots/phasebins_half.tex'")?;
+    }
+    writeln!(temp_gnu_writer, "set xlabel 'Pulse Phase'")?;
+    writeln!(temp_gnu_writer, "set ylabel 'Count'")?;
+    writeln!(temp_gnu_writer, "set mxtics 5")?;
+    writeln!(temp_gnu_writer, "set mytics 5")?;
+    writeln!(temp_gnu_writer, "set xtics out")?;
+    writeln!(temp_gnu_writer, "set style fill empty border 0")?;
+    writeln!(temp_gnu_writer, "set label '$1/2f$' at graph 0.95, graph 0.95 center")?;
+    writeln!(temp_gnu_writer, "plot [] [] '{}' using ($1+0.025):2:3 notitle with yerrorbars lt black, '{}' using 1:2 notitle with hsteps forward lt black", temp_data_file.to_str().unwrap(), temp_data_file.to_str().unwrap())?;
     temp_data_writer.flush()?;
     temp_gnu_writer.flush()?;
     run_gnuplot(&temp_gnu_file)?;
@@ -456,7 +513,7 @@ mod tests {
 
     #[test]
     fn synthetic_data() {
-        let freq1 = 21.0;
+        let freq1 = 23.0;
         let freq2 = 67.0;
         let synthetic_data = generate_synthetic_data(freq1, freq2);
         let data = analyze_pulsar_data(synthetic_data, Box::new(std::io::sink()), Some((freq1, freq2)));
